@@ -24,6 +24,16 @@ pub enum Command {
     Done { pk: i64 },
     /// Mark a row awaiting_human (handed off to confirmation).
     Await { pk: i64 },
+    /// Skip pending rows without processing them (pending → skipped). `<pk>` skips
+    /// one; `--all` drops the whole backlog (e.g. on consumer recovery, to ignore
+    /// messages queued during downtime). Dispatched rows are never touched.
+    Skip {
+        /// The row to skip (omit when using --all).
+        pk: Option<i64>,
+        /// Skip every pending row.
+        #[arg(long)]
+        all: bool,
+    },
     /// Post a message as yourself.
     Post {
         #[arg(long)]
@@ -177,6 +187,12 @@ pub fn run(cmd: Command) -> Result<(), String> {
         Command::Body { pk } => http_post("/body", json!({ "pk": pk }))?,
         Command::Done { pk } => http_post("/done", json!({ "pk": pk }))?,
         Command::Await { pk } => http_post("/await", json!({ "pk": pk }))?,
+        Command::Skip { pk, all } => {
+            if pk.is_none() && !all {
+                return Err("skip needs a <pk> or --all".to_string());
+            }
+            http_post("/skip", json!({ "pk": pk, "all": all }))?
+        }
         Command::Post {
             channel,
             thread,

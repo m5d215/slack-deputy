@@ -64,6 +64,32 @@ async fn await_handler(Json(req): Json<PkReq>) -> Result<String, (StatusCode, St
 }
 
 #[derive(Deserialize)]
+struct SkipReq {
+    #[serde(default)]
+    pk: Option<i64>,
+    #[serde(default)]
+    all: bool,
+}
+
+/// Skip pending rows without processing them (pending → skipped). `{all:true}`
+/// drops the whole backlog (consumer recovery); `{pk}` skips one. Dispatched
+/// rows are never touched.
+async fn skip_handler(Json(req): Json<SkipReq>) -> ApiResult {
+    let db = &Shared::get().db;
+    let skipped = if req.all {
+        db.skip_pending().map_err(fail)?
+    } else if let Some(pk) = req.pk {
+        db.skip(pk).map_err(fail)?
+    } else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "skip needs pk or --all".to_string(),
+        ));
+    };
+    Ok(Json(json!({ "ok": true, "skipped": skipped })))
+}
+
+#[derive(Deserialize)]
 struct TailReq {
     #[serde(default)]
     from: Option<i64>,
@@ -232,6 +258,7 @@ pub async fn run_http_server() {
         .route("/body", post(body_handler))
         .route("/done", post(done_handler))
         .route("/await", post(await_handler))
+        .route("/skip", post(skip_handler))
         .route("/tail", post(tail_handler))
         // slack verbs (user/bot token)
         .route("/post", post(post_handler))

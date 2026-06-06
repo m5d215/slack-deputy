@@ -47,7 +47,9 @@ flowchart LR
 - **SQLite** — the queue and the single source of inbound truth. One `messages`
   table; status flows `pending → dispatched → done` (or `awaiting_human` when a
   handler hands off to a confirmation). `ambient` rows are captured for context
-  only and never enter that flow.
+  only and never enter that flow. `skip` retires pending rows as `skipped`
+  without processing them — use `slack-deputy skip --all` on consumer recovery to
+  drop the backlog queued during downtime instead of replaying it.
 - **consumer** — a Claude Code skill. A long-lived *dispatcher* drains the queue
   (it only claims PKs, never reads message bodies — untrusted Slack text stays out
   of its context) and hands each event to a background *subagent* that reads the

@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS messages (
     thread_ts  TEXT,                             -- partition key
     ts         TEXT NOT NULL,                    -- Slack ts (FIFO order)
     body       TEXT NOT NULL,                    -- event payload JSON (untrusted)
-    status     TEXT NOT NULL DEFAULT 'pending',  -- pending | dispatched | done | awaiting_human | ambient
+    status     TEXT NOT NULL DEFAULT 'pending',  -- pending | dispatched | done | awaiting_human | ambient | skipped
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_pending ON messages(status, ts);
@@ -216,6 +216,29 @@ impl Db {
         conn.execute(
             "UPDATE messages SET status = ?2 WHERE pk = ?1",
             params![pk, status],
+        )
+    }
+
+    /// Skip a single pending row (pending → skipped). Only pending rows are
+    /// touched, so this can never clobber a row a worker already owns. Returns
+    /// the rows changed (0 if the row wasn't pending).
+    pub fn skip(&self, pk: i64) -> rusqlite::Result<usize> {
+        let conn = self.conn.lock().expect("db mutex poisoned");
+        conn.execute(
+            "UPDATE messages SET status = 'skipped' WHERE pk = ?1 AND status = 'pending'",
+            params![pk],
+        )
+    }
+
+    /// Skip the whole unclaimed backlog (every pending row → skipped), returning
+    /// the count. For consumer recovery: drop messages queued during downtime
+    /// without pretending they were handled. `dispatched` rows are left alone —
+    /// they belong to a worker (or are stale work for the reaper), not here.
+    pub fn skip_pending(&self) -> rusqlite::Result<usize> {
+        let conn = self.conn.lock().expect("db mutex poisoned");
+        conn.execute(
+            "UPDATE messages SET status = 'skipped' WHERE status = 'pending'",
+            [],
         )
     }
 
