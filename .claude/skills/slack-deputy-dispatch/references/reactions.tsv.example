@@ -1,0 +1,8 @@
+# Reaction → action mappings (consumer-side). Copy to reactions.tsv and edit.
+# Format: <emoji>\t<action>   (tab-separated, one per line; # lines are comments)
+# A self-placed reaction with a matching row runs its action; the action is a
+# natural-language instruction the handler carries out. {permalink} is replaced
+# with the reacted message's permalink from the event body.
+# Examples:
+# :ticket:	create a ticket from the message: run `<your ticket command> {permalink}`
+# :eyes:	start tracking this thread

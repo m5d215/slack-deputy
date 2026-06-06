@@ -1,0 +1,27 @@
+[package]
+name = "slack-deputy"
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+description = "Act as yourself on Slack — a personal Slack agent daemon"
+repository = "https://github.com/m5d215/slack-deputy"
+authors = ["m5d215"]
+
+[dependencies]
+slack-morphism = { version = "2.22", features = ["hyper"] }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
+clap = { version = "4", features = ["derive"] }
+axum = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
+
+# Fork: deserialize message blocks leniently (drop blocks slack-morphism's typed
+# model can't represent, e.g. some notification apps send overflow options with a
+# url and no value) instead of silently dropping the whole message over Socket Mode.
+[patch.crates-io]
+slack-morphism = { git = "https://github.com/m5d215/slack-morphism-rust", rev = "d84579e080a807d6a41da8982cd585a971851392" }
