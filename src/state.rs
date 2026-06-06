@@ -59,7 +59,10 @@ impl Shared {
     }
 
     pub fn is_self_bot(&self, bot_id: &str) -> bool {
-        self.self_bot_ids.lock().expect("self_bot_ids poisoned").contains(bot_id)
+        self.self_bot_ids
+            .lock()
+            .expect("self_bot_ids poisoned")
+            .contains(bot_id)
     }
 
     /// Learn a self-post bot_id (from a chat.postMessage response) and persist

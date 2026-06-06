@@ -55,9 +55,9 @@ async fn daemon_main() {
     let db = Arc::new(Db::open(&config.db_path).expect("open sqlite"));
     info!(kind = "startup.db_open", path = %config.db_path, "sqlite opened (WAL)");
 
-    let client = Arc::new(
-        SlackClient::new(SlackClientHyperConnector::new().expect("hyper connector")),
-    );
+    let client = Arc::new(SlackClient::new(
+        SlackClientHyperConnector::new().expect("hyper connector"),
+    ));
     let bot_token = SlackApiToken::new(SlackApiTokenValue::from(config.bot_token.clone()));
     let user_token = SlackApiToken::new(SlackApiTokenValue::from(config.user_token.clone()));
 
@@ -77,7 +77,9 @@ async fn daemon_main() {
                 "bot auth ok"
             );
         }
-        Err(e) => error!(kind = "startup.auth_bot_failed", error = %format!("{e:?}"), "bot auth failed"),
+        Err(e) => {
+            error!(kind = "startup.auth_bot_failed", error = %format!("{e:?}"), "bot auth failed")
+        }
     }
     if let Ok(Some(b)) = db.meta_get("self_post_bot_id") {
         self_bot_ids.insert(b);
@@ -102,7 +104,11 @@ async fn daemon_main() {
         Some(me) => {
             let req = SlackApiConversationsOpenRequest::new()
                 .with_users(vec![SlackUserId::from(me.clone())]);
-            match client.open_session(&bot_token).conversations_open(&req).await {
+            match client
+                .open_session(&bot_token)
+                .conversations_open(&req)
+                .await
+            {
                 Ok(r) => Some(r.channel.id.to_string()),
                 Err(e) => {
                     error!(kind = "startup.bot_dm_failed", error = %format!("{e:?}"), "open bot DM failed");
@@ -143,6 +149,9 @@ async fn daemon_main() {
         watch_channels = config.watch_channels.len(),
         "connecting via socket mode"
     );
-    listener.listen_for(&app_token).await.expect("listen_for failed");
+    listener
+        .listen_for(&app_token)
+        .await
+        .expect("listen_for failed");
     listener.serve().await;
 }

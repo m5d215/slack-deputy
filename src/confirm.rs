@@ -18,7 +18,9 @@ fn now() -> String {
 }
 
 fn bot_token() -> SlackApiToken {
-    SlackApiToken::new(SlackApiTokenValue::from(Shared::get().config.bot_token.clone()))
+    SlackApiToken::new(SlackApiTokenValue::from(
+        Shared::get().config.bot_token.clone(),
+    ))
 }
 
 /// Concatenate the text of a message's section blocks. Used by the DM read-back
@@ -46,7 +48,9 @@ fn action_from_blocks(content: &SlackMessageContent) -> Option<Value> {
     for b in content.blocks.as_ref()? {
         let SlackBlock::Actions(a) = b else { continue };
         for el in &a.elements {
-            let SlackActionBlockElement::Button(btn) = el else { continue };
+            let SlackActionBlockElement::Button(btn) = el else {
+                continue;
+            };
             if let Some(action) = btn
                 .value
                 .as_ref()
@@ -78,7 +82,9 @@ fn resolved_content(blocks: Option<Vec<SlackBlock>>, label: &str) -> SlackMessag
         )])
         .into(),
     );
-    SlackMessageContent::new().with_text(label.to_string()).with_blocks(kept)
+    SlackMessageContent::new()
+        .with_text(label.to_string())
+        .with_blocks(kept)
 }
 
 /// Open (or fetch) the DM channel with the human, using the bot token.
@@ -103,8 +109,11 @@ async fn open_dm() -> Result<SlackChannelId, String> {
 /// executes), so the click round-trips everything the handler needs.
 fn decision_button(decision: &str, label: &str, action: &Value) -> SlackBlockButtonElement {
     let value = json!({ "decision": decision, "action": action }).to_string();
-    SlackBlockButtonElement::new(SlackActionId::from(decision), SlackBlockPlainTextOnly::from(label))
-        .with_value(value)
+    SlackBlockButtonElement::new(
+        SlackActionId::from(decision),
+        SlackBlockPlainTextOnly::from(label),
+    )
+    .with_value(value)
 }
 
 /// Post a confirmation DM and return the DM (channel, ts). The interaction shape
@@ -113,6 +122,7 @@ fn decision_button(decision: &str, label: &str, action: &Value) -> SlackBlockBut
 /// - default: 承認 / 却下 buttons (decision = "approve" / "reject").
 /// - `choices`: one button per choice (decision = the chosen string) + 却下.
 /// - `danger`: 承認 gets danger styling + a confirm dialog.
+///
 /// `action` is opaque to us; it rides in each button's value and comes back on click.
 pub async fn ask(
     text: String,
@@ -205,11 +215,21 @@ pub async fn dm_history(thread: Option<String>) -> Result<Vec<Value>, String> {
     let messages = match thread {
         Some(ts) => {
             let req = SlackApiConversationsRepliesRequest::new(channel, SlackTs::from(ts));
-            session.conversations_replies(&req).await.map_err(|e| format!("{e:?}"))?.messages
+            session
+                .conversations_replies(&req)
+                .await
+                .map_err(|e| format!("{e:?}"))?
+                .messages
         }
         None => {
-            let req = SlackApiConversationsHistoryRequest::new().with_channel(channel).with_limit(20);
-            session.conversations_history(&req).await.map_err(|e| format!("{e:?}"))?.messages
+            let req = SlackApiConversationsHistoryRequest::new()
+                .with_channel(channel)
+                .with_limit(20);
+            session
+                .conversations_history(&req)
+                .await
+                .map_err(|e| format!("{e:?}"))?
+                .messages
         }
     };
     Ok(messages.iter().map(dm_msg_json).collect())
@@ -242,7 +262,11 @@ pub async fn try_free_text_answer(shared: &Shared, m: &SlackMessageEvent) -> boo
         return false;
     };
     let reply_ts = m.origin.ts.to_string();
-    let reply_text = m.content.as_ref().and_then(|c| c.text.clone()).unwrap_or_default();
+    let reply_text = m
+        .content
+        .as_ref()
+        .and_then(|c| c.text.clone())
+        .unwrap_or_default();
     if reply_text.trim().is_empty() {
         return false;
     }
@@ -270,7 +294,14 @@ pub async fn try_free_text_answer(shared: &Shared, m: &SlackMessageEvent) -> boo
     // Record a text confirmation pointing at the ask; the handler reads the thread
     // (root = draft, this reply = the human's text) and decides what to do.
     let body = json!({ "decision": "text", "action": action, "ask_ts": thread_ts }).to_string();
-    if let Err(e) = shared.db.insert("confirmation", Some(&channel), None, &reply_ts, &body, &now()) {
+    if let Err(e) = shared.db.insert(
+        "confirmation",
+        Some(&channel),
+        None,
+        &reply_ts,
+        &body,
+        &now(),
+    ) {
         warn!(kind = "confirm.text_insert_failed", error = %format!("{e:?}"), "text confirmation insert failed");
         return true; // recorded-or-not, don't also capture it as a plain message
     }
@@ -330,15 +361,16 @@ pub async fn handle_interaction(
     // any content (draft, free-text reply) — the daemon doesn't extract content.
     let ask_ts = msg_ts.as_ref().map(|t| t.to_string());
     let body = json!({ "decision": decision, "action": action_json, "ask_ts": ask_ts }).to_string();
-    let ts = msg_ts
-        .as_ref()
-        .map(|t| t.to_string())
-        .unwrap_or_else(now);
+    let ts = msg_ts.as_ref().map(|t| t.to_string()).unwrap_or_else(now);
     let chan_str = channel.as_ref().map(|c| c.to_string());
-    if let Err(e) = shared
-        .db
-        .insert("confirmation", chan_str.as_deref(), None, &ts, &body, &now())
-    {
+    if let Err(e) = shared.db.insert(
+        "confirmation",
+        chan_str.as_deref(),
+        None,
+        &ts,
+        &body,
+        &now(),
+    ) {
         warn!(kind = "confirm.insert_failed", error = %format!("{e:?}"), "confirmation insert failed");
     }
 
@@ -350,7 +382,10 @@ pub async fn handle_interaction(
             "approve" => "✅ 承認済み".to_string(),
             other => format!("✅ {other}"), // a chosen option
         };
-        let content = resolved_content(ev.message.as_ref().and_then(|m| m.content.blocks.clone()), &label);
+        let content = resolved_content(
+            ev.message.as_ref().and_then(|m| m.content.blocks.clone()),
+            &label,
+        );
         let token = bot_token();
         let session = shared.slack.open_session(&token);
         let req = SlackApiChatUpdateRequest::new(c, content, t);

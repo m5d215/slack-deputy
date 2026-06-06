@@ -68,7 +68,9 @@ impl Db {
     pub fn open(path: &str) -> rusqlite::Result<Self> {
         let conn = Connection::open(path)?;
         // WAL lets the consumer CLI read / update status while the daemon writes.
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=3000;")?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=3000;",
+        )?;
         conn.execute_batch(SCHEMA)?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -91,6 +93,7 @@ impl Db {
     /// Insert an inbound event with an explicit status. `ambient` rows are stored
     /// as pull-only context and are never dispatched — `claim_next` only claims
     /// `pending` — so the consumer pays no per-event cost for them.
+    #[allow(clippy::too_many_arguments)] // one column per arg; a struct would just move the noise
     pub fn insert_with_status(
         &self,
         kind: &str,
@@ -163,7 +166,10 @@ impl Db {
             )
             .optional()?;
         if let Some((pk, _)) = &row {
-            tx.execute("UPDATE messages SET status = 'dispatched' WHERE pk = ?1", params![pk])?;
+            tx.execute(
+                "UPDATE messages SET status = 'dispatched' WHERE pk = ?1",
+                params![pk],
+            )?;
         }
         tx.commit()?;
         Ok(row)
@@ -172,7 +178,9 @@ impl Db {
     /// Highest pk (0 if empty). For `tail` to start from "now".
     pub fn max_pk(&self) -> rusqlite::Result<i64> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        conn.query_row("SELECT COALESCE(MAX(pk), 0) FROM messages", [], |r| r.get(0))
+        conn.query_row("SELECT COALESCE(MAX(pk), 0) FROM messages", [], |r| {
+            r.get(0)
+        })
     }
 
     /// Rows with pk > after, oldest first. For `tail` to follow new captures.
@@ -195,21 +203,30 @@ impl Db {
 
     pub fn get_body(&self, pk: i64) -> rusqlite::Result<Option<String>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        conn.query_row("SELECT body FROM messages WHERE pk = ?1", params![pk], |r| r.get(0))
-            .optional()
+        conn.query_row(
+            "SELECT body FROM messages WHERE pk = ?1",
+            params![pk],
+            |r| r.get(0),
+        )
+        .optional()
     }
 
     pub fn set_status(&self, pk: i64, status: &str) -> rusqlite::Result<usize> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        conn.execute("UPDATE messages SET status = ?2 WHERE pk = ?1", params![pk, status])
+        conn.execute(
+            "UPDATE messages SET status = ?2 WHERE pk = ?1",
+            params![pk, status],
+        )
     }
 
     // --- meta kv ---
 
     pub fn meta_get(&self, key: &str) -> rusqlite::Result<Option<String>> {
         let conn = self.conn.lock().expect("db mutex poisoned");
-        conn.query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| r.get(0))
-            .optional()
+        conn.query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| {
+            r.get(0)
+        })
+        .optional()
     }
 
     pub fn meta_set(&self, key: &str, value: &str) -> rusqlite::Result<usize> {

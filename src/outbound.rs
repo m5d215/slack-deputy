@@ -17,7 +17,9 @@ use tracing::{error, info};
 type ApiResult = Result<Json<Value>, (StatusCode, String)>;
 
 fn user_session() -> SlackApiToken {
-    SlackApiToken::new(SlackApiTokenValue::from(Shared::get().config.user_token.clone()))
+    SlackApiToken::new(SlackApiTokenValue::from(
+        Shared::get().config.user_token.clone(),
+    ))
 }
 
 fn fail(e: impl std::fmt::Debug) -> (StatusCode, String) {
@@ -54,7 +56,10 @@ async fn done_handler(Json(req): Json<PkReq>) -> Result<String, (StatusCode, Str
 }
 
 async fn await_handler(Json(req): Json<PkReq>) -> Result<String, (StatusCode, String)> {
-    Shared::get().db.set_status(req.pk, "awaiting_human").map_err(fail)?;
+    Shared::get()
+        .db
+        .set_status(req.pk, "awaiting_human")
+        .map_err(fail)?;
     Ok("ok".to_string())
 }
 
@@ -98,7 +103,7 @@ async fn post_handler(Json(req): Json<PostReq>) -> ApiResult {
 
     // Learn the bot_id Slack stamps on our user-token posts → echo suppression.
     if let Some(bot_id) = resp.message.sender.bot_id.as_ref() {
-        shared.learn_self_bot(&bot_id.to_string());
+        shared.learn_self_bot(bot_id.as_ref());
     }
     info!(kind = "outbound.posted", channel = %req.channel, ts = %resp.ts, "posted as user");
     Ok(Json(json!({ "ok": true, "ts": resp.ts.to_string() })))
@@ -198,9 +203,10 @@ struct AskReq {
 
 /// Post a confirmation DM with buttons (control channel).
 async fn ask_handler(Json(req): Json<AskReq>) -> ApiResult {
-    let (channel, ts) = crate::confirm::ask(req.text, req.action, req.choices, req.danger, req.context)
-        .await
-        .map_err(fail)?;
+    let (channel, ts) =
+        crate::confirm::ask(req.text, req.action, req.choices, req.danger, req.context)
+            .await
+            .map_err(fail)?;
     Ok(Json(json!({ "ok": true, "channel": channel, "ts": ts })))
 }
 
@@ -235,9 +241,7 @@ pub async fn run_http_server() {
         .route("/thread", post(thread_handler))
         .route("/ask", post(ask_handler))
         .route("/dm", post(dm_handler));
-    let listener = TcpListener::bind(listen.as_str())
-        .await
-        .expect("bind http");
+    let listener = TcpListener::bind(listen.as_str()).await.expect("bind http");
     info!(kind = "startup.http_listening", addr = %listen, "http server listening");
     if let Err(e) = axum::serve(listener, app).await {
         error!(kind = "http.serve_failed", error = %format!("{e:?}"), "http serve ended");

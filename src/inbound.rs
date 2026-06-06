@@ -69,11 +69,11 @@ fn handle_message(shared: &Shared, m: SlackMessageEvent) {
     // Echo suppression: our own posts come back carrying a self bot_id (the
     // bot's own, or the learned user-token-post bot_id). Manual posts have no
     // bot_id, so they survive.
-    if let Some(sender_bot) = m.sender.bot_id.as_ref() {
-        if shared.is_self_bot(&sender_bot.to_string()) {
-            info!(kind = "echo.drop", ts = %m.origin.ts, "dropped own echo (self bot_id)");
-            return;
-        }
+    if let Some(sender_bot) = m.sender.bot_id.as_ref()
+        && shared.is_self_bot(sender_bot.as_ref())
+    {
+        info!(kind = "echo.drop", ts = %m.origin.ts, "dropped own echo (self bot_id)");
+        return;
     }
 
     let Some(text) = m.content.as_ref().and_then(|c| c.text.clone()) else {
@@ -172,28 +172,28 @@ fn classify_message(
     if matches!(channel_type, Some("im") | Some("mpim")) {
         return Capture::Directed;
     }
-    if let Some(me) = &shared.my_user_id {
-        if text.contains(&format!("<@{me}>")) {
-            return Capture::Directed;
-        }
+    if let Some(me) = &shared.my_user_id
+        && text.contains(&format!("<@{me}>"))
+    {
+        return Capture::Directed;
     }
-    if let Some(t) = thread_ts {
-        if shared.db.thread_has_directed(t).unwrap_or(false) {
-            return Capture::Directed;
-        }
+    if let Some(t) = thread_ts
+        && shared.db.thread_has_directed(t).unwrap_or(false)
+    {
+        return Capture::Directed;
     }
     if shared.config.watch_channels.contains(channel) {
         return Capture::Ambient;
     }
-    if let Some(me) = &shared.my_user_id {
-        if user == Some(me.as_str()) {
-            return Capture::Ambient;
-        }
+    if let Some(me) = &shared.my_user_id
+        && user == Some(me.as_str())
+    {
+        return Capture::Ambient;
     }
-    if let Some(t) = thread_ts {
-        if shared.db.thread_tracked(t).unwrap_or(false) {
-            return Capture::Ambient;
-        }
+    if let Some(t) = thread_ts
+        && shared.db.thread_tracked(t).unwrap_or(false)
+    {
+        return Capture::Ambient;
     }
     Capture::Drop
 }
@@ -222,13 +222,17 @@ fn handle_reaction(
     // Echo suppression: reaction_added has no bot_id, so we can't use the
     // bot_id trick. Match the key we recorded when we emitted a reaction, and
     // require reactor == me (so we never drop someone else's reaction).
-    if let (Some(me), Some(it)) = (&shared.my_user_id, &item_ts) {
-        if user.to_string() == *me {
-            let key = format!("{}:{}:{}", channel.as_deref().unwrap_or(""), it, reaction.to_string());
-            if shared.take_self_reaction(&key) {
-                info!(kind = "echo.drop", row = "reaction", "dropped own reaction echo (key ledger)");
-                return;
-            }
+    if let (Some(me), Some(it)) = (&shared.my_user_id, &item_ts)
+        && user.to_string() == *me
+    {
+        let key = format!("{}:{}:{}", channel.as_deref().unwrap_or(""), it, reaction);
+        if shared.take_self_reaction(&key) {
+            info!(
+                kind = "echo.drop",
+                row = "reaction",
+                "dropped own reaction echo (key ledger)"
+            );
+            return;
         }
     }
 

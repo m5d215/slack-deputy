@@ -112,7 +112,10 @@ fn fmt_row(r: &Row) -> String {
         "confirmation" => format!("decision={}", get("decision")),
         _ => String::new(),
     };
-    format!("[{}] {:<12} {:<14} {:<12} {}", r.pk, r.kind, r.status, chan, summary)
+    format!(
+        "[{}] {:<12} {:<14} {:<12} {}",
+        r.pk, r.kind, r.status, chan, summary
+    )
 }
 
 fn run_tail(from: Option<i64>) -> Result<(), String> {
@@ -132,7 +135,8 @@ fn run_tail(from: Option<i64>) -> Result<(), String> {
 }
 
 fn daemon_url(path: &str) -> String {
-    let base = std::env::var("SLACK_DEPUTY_URL").unwrap_or_else(|_| "http://127.0.0.1:8799".to_string());
+    let base =
+        std::env::var("SLACK_DEPUTY_URL").unwrap_or_else(|_| "http://127.0.0.1:8799".to_string());
     format!("{}{}", base.trim_end_matches('/'), path)
 }
 
@@ -142,7 +146,12 @@ fn request(path: &str, body: Value) -> Result<String, String> {
         .post(daemon_url(path))
         .json(&body)
         .send()
-        .map_err(|e| format!("request to daemon failed (is it running? SLACK_DEPUTY_URL={}): {e}", daemon_url("")))?;
+        .map_err(|e| {
+            format!(
+                "request to daemon failed (is it running? SLACK_DEPUTY_URL={}): {e}",
+                daemon_url("")
+            )
+        })?;
     let status = resp.status();
     let text = resp.text().unwrap_or_default();
     if !status.is_success() {
@@ -168,26 +177,44 @@ pub fn run(cmd: Command) -> Result<(), String> {
         Command::Body { pk } => http_post("/body", json!({ "pk": pk }))?,
         Command::Done { pk } => http_post("/done", json!({ "pk": pk }))?,
         Command::Await { pk } => http_post("/await", json!({ "pk": pk }))?,
-        Command::Post { channel, thread, text } => {
-            http_post("/post", json!({ "channel": channel, "thread_ts": thread, "text": text }))?
-        }
-        Command::React { channel, ts, name } => {
-            http_post("/react", json!({ "channel": channel, "ts": ts, "name": name }))?
-        }
-        Command::Unreact { channel, ts, name } => {
-            http_post("/unreact", json!({ "channel": channel, "ts": ts, "name": name }))?
-        }
+        Command::Post {
+            channel,
+            thread,
+            text,
+        } => http_post(
+            "/post",
+            json!({ "channel": channel, "thread_ts": thread, "text": text }),
+        )?,
+        Command::React { channel, ts, name } => http_post(
+            "/react",
+            json!({ "channel": channel, "ts": ts, "name": name }),
+        )?,
+        Command::Unreact { channel, ts, name } => http_post(
+            "/unreact",
+            json!({ "channel": channel, "ts": ts, "name": name }),
+        )?,
         Command::Delete { channel, ts } => {
             http_post("/delete", json!({ "channel": channel, "ts": ts }))?
         }
         Command::Thread { channel, ts } => {
             http_post("/thread", json!({ "channel": channel, "ts": ts }))?
         }
-        Command::Ask { text, action, choose, danger, context } => {
+        Command::Ask {
+            text,
+            action,
+            choose,
+            danger,
+            context,
+        } => {
             let action: serde_json::Value =
                 serde_json::from_str(&action).map_err(|e| format!("--action must be JSON: {e}"))?;
             let choices: Vec<String> = choose
-                .map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect())
+                .map(|s| {
+                    s.split(',')
+                        .map(|x| x.trim().to_string())
+                        .filter(|x| !x.is_empty())
+                        .collect()
+                })
                 .unwrap_or_default();
             http_post(
                 "/ask",
