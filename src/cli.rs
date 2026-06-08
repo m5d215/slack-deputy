@@ -75,19 +75,32 @@ pub enum Command {
         #[arg(long)]
         ts: String,
     },
-    /// Ask the human to confirm an action (bot DM + buttons). `--action` is JSON
-    /// embedded in the buttons; it comes back as a confirmation row on click.
-    /// Default = 承認/却下. `--choose a,b,c` = one button per choice (decision is
-    /// the chosen string). `--danger` = danger styling + a confirm dialog.
+    /// Ask the human to confirm an action (bot DM + buttons). `無視` (terminal
+    /// no-op) is always present. Pick one positive button:
+    /// `--post` = terminal 投稿 (the daemon posts `--text` to `--channel`/`--thread`
+    /// on click, no consumer hop); `--choose a,b,c` = one routed button per choice
+    /// (decision = the chosen string); else `--action` JSON = a routed 承認 a
+    /// subagent executes. `--danger` = danger styling + a confirm dialog.
     Ask {
         #[arg(long)]
         text: String,
+        /// Terminal post: the approve button is 投稿 and the daemon posts on click.
         #[arg(long)]
-        action: String,
-        /// Comma-separated choices → choose-one buttons instead of approve/reject.
+        post: bool,
+        /// Post target channel (required with --post).
+        #[arg(long)]
+        channel: Option<String>,
+        /// Post target thread (optional, with --post).
+        #[arg(long)]
+        thread: Option<String>,
+        /// Routed action JSON (for --choose, or a non-post 承認). Comes back as a
+        /// confirmation row on click.
+        #[arg(long)]
+        action: Option<String>,
+        /// Comma-separated choices → routed choose-one buttons.
         #[arg(long)]
         choose: Option<String>,
-        /// Danger styling + a confirm dialog on the approve button.
+        /// Danger styling + a confirm dialog on the positive button.
         #[arg(long)]
         danger: bool,
         /// Optional smaller context line (markdown) under the prompt.
@@ -217,13 +230,14 @@ pub fn run(cmd: Command) -> Result<(), String> {
         }
         Command::Ask {
             text,
+            post,
+            channel,
+            thread,
             action,
             choose,
             danger,
             context,
         } => {
-            let action: serde_json::Value =
-                serde_json::from_str(&action).map_err(|e| format!("--action must be JSON: {e}"))?;
             let choices: Vec<String> = choose
                 .map(|s| {
                     s.split(',')
@@ -232,9 +246,24 @@ pub fn run(cmd: Command) -> Result<(), String> {
                         .collect()
                 })
                 .unwrap_or_default();
+            let post_routing = if post {
+                let channel = channel.ok_or("--post needs --channel")?;
+                json!({ "type": "post", "channel": channel, "thread": thread })
+            } else {
+                Value::Null
+            };
+            let action: Value = match action {
+                Some(a) => {
+                    serde_json::from_str(&a).map_err(|e| format!("--action must be JSON: {e}"))?
+                }
+                None => Value::Null,
+            };
+            if !post && choices.is_empty() && action.is_null() {
+                return Err("ask needs one of: --post, --choose, --action".to_string());
+            }
             http_post(
                 "/ask",
-                json!({ "text": text, "action": action, "choices": choices, "danger": danger, "context": context }),
+                json!({ "text": text, "action": action, "post": post_routing, "choices": choices, "danger": danger, "context": context }),
             )?
         }
         Command::Dm { thread } => http_post("/dm", json!({ "thread": thread }))?,

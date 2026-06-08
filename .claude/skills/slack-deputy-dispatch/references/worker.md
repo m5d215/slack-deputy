@@ -26,25 +26,26 @@ it works from any cwd.
 5. **Act as yourself** (these post under your own name via the daemon):
    - `slack-deputy post --channel C --text "..." [--thread TS]`
    - `slack-deputy react --channel C --ts TS --name emoji`
-   - `slack-deputy ask --text "<preview>" --action '<json>'` — asks the human in
-     the bot DM; the `<json>` action comes back as a `confirmation` event handled
-     on a later tick (the body carries `decision` + your `action`). Shape the ask
-     to the question:
-     - default → 承認 / 却下 (decision = `approve` / `reject`).
-     - `--choose "a,b,c"` → one button per choice (decision = the chosen string),
-       e.g. picking an issue-tracker status.
+   - `slack-deputy ask --text "<preview>" …` — asks the human in the bot DM. A
+     `無視` button (terminal no-op) is always added; you pick one positive button:
+     - **`--post --channel C [--thread TS]`** → a terminal `投稿` button. On click
+       **the daemon posts `--text` itself** under your name — no confirmation event
+       comes back, you're done at `ask` time. This is the path for **posting a
+       generated draft** (reply, report): put the *draft itself* in `--text` (it's
+       what the human reviews and what gets posted). The daemon reads the draft
+       from the ask DM; you never round-trip it.
+     - `--choose "a,b,c"` → one routed button per choice (decision = the chosen
+       string), e.g. picking an issue-tracker status. Routed: comes back as a
+       `confirmation` event with `--action` you handle on a later tick.
+     - `--action '<json>'` (no `--post`/`--choose`) → a routed `承認` button for a
+       non-post approval a later tick must execute. The `<json>` rides in the
+       button and returns in the confirmation body (`decision` + `action`).
      - `--danger` → danger styling + a confirm dialog, for irreversible actions.
      - `--context "<markdown>"` → a smaller line under the prompt, e.g. the target
        message's `permalink`.
 
-     **Posting a generated draft for approval** (e.g. "post this investigation
-     report to the thread"): put the *draft itself* in `--text` (it's what the
-     human reviews and what gets posted), and keep `--action` routing-only — do
-     **not** stuff the draft into `--action` (it won't fit the button value). The
-     draft stays in the ask DM; on the confirmation you read it back (see below).
-     e.g. `--action '{"type":"post","channel":"C…","thread":"<ts>"}'`. Tell the
-     human in the prompt they can reply in the ask's thread to edit before
-     approving (free-text answer).
+     Tell the human in the prompt they can reply in the ask's thread to edit before
+     approving (free-text answer) — that works on any ask, including `--post`.
 6. **Close the row**: `slack-deputy done <pk>` (handled inline) or
    `slack-deputy await <pk>` (handed to a human via `ask`).
 
@@ -58,19 +59,20 @@ it works from any cwd.
   so it's already the human authorization — execute the mapped action directly (no
   second `ask`). Unmapped → observe read-only and report what action a mapping
   could bind it to; do not act.
-- **`confirmation`** — a human answered an earlier `ask`. The body carries
-  `decision`, the opaque `action` (routing), and `ask_ts` (a pointer to the ask).
-  The **content lives in the ask thread, not the body** — read it back with
+- **`confirmation`** — a human answered an earlier `ask`. Terminal answers
+  (clicking `投稿` or `無視`) the daemon already carried out at the edge, so they
+  **never reach you**. You only get the answers that need judgment. The body
+  carries `decision`, the routed `action`, and `ask_ts` (a pointer to the ask). The
+  **content lives in the ask thread, not the body** — read it back with
   `slack-deputy dm --thread <ask_ts>`: the root message (a bot message, `bot_id`
   set) is the draft you proposed; any later messages (no `bot_id`) are the human's
   free-text replies. Then act on `decision`:
-  - `approve` → execute `action` using the root draft (e.g. post it).
   - a chosen value (from `--choose`) → execute `action` with that choice.
-  - `reject` → close the row, do nothing else.
-  - `text` → the human replied with free text instead of clicking. Read their
-    reply from the thread and judge: a finished replacement → use it as the text;
-    an instruction (e.g. "shorten it") → revise the root draft accordingly and
-    `ask` again (a fresh roundtrip); ambiguous → `ask` to clarify.
+  - `text` → the human replied with free text instead of clicking a button. Read
+    their reply from the thread and judge: a finished replacement → post it; an
+    instruction (e.g. "shorten it") → revise the root draft and `ask --post` again
+    (a fresh roundtrip); ambiguous → `ask` to clarify. (`action` carries the post
+    target, e.g. `{"type":"post","channel":"C…","thread":"<ts>"}`.)
 
   Always re-check world state first for freshness/idempotency — the approval may be
   stale (re-read the target thread, check if already posted).
