@@ -18,7 +18,11 @@ it works from any cwd.
      idempotency (is my reply / reaction already there?). Then act.
    - **heavy / risky / outward-facing** (changes a system, creates an artifact, or
      you're unsure) → do **not** act directly. Route through human confirmation
-     with `slack-deputy ask`.
+     with `slack-deputy ask` (the Slack bot DM) and close with `await`. This is the
+     **only** way to involve a human: it's asynchronous and never blocks anyone. If
+     `ask` can't go out, close the row with `done` and report why — the human will
+     see your report. **Never** use `AskUserQuestion` or any tool that waits on user
+     input; the dispatcher is a non-interactive resident session and must not stall.
 4. **Check for an open confirmation** before acting in a thread that might have
    one: `slack-deputy dm` reads the bot DM. Each ask has `open` — `true` = still
    awaiting an answer, `false` = resolved (the outcome shows as ✅ / ❌ / ✏️).
@@ -91,3 +95,9 @@ read-only.
 Mappings and autonomous mutations are not yet trusted. **Default to
 readonly/observe.** Send anything outward-facing through `ask` rather than firing
 it directly. Always report your tier judgment and what you did (or chose not to).
+
+Human confirmation is **only ever** the Slack `ask` route — asynchronous, out of
+band, blocking no one. Never reach for `AskUserQuestion` or any interactive prompt:
+the whole pipeline (dispatcher + workers) runs unattended and must keep flowing.
+When in doubt, observe and report; let the human pick it up in Slack on their own
+time.
