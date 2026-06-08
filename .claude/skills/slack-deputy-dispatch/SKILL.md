@@ -33,6 +33,22 @@ Loop until empty:
 You do not collect subagent results. Each subagent owns its event end to end,
 including closing the row. Background subagents keep running after this pass ends.
 
+## Never block on human input
+
+This session is a **long-lived, non-interactive** consumer — it must keep
+draining ticks forever and must never stall waiting for a human. So:
+
+- **Never** call `AskUserQuestion` (or any tool that blocks on user input), and
+  never pause a tick to "ask the user what to do" — not even after a subagent
+  reports a hard/ambiguous case. You don't collect results anyway, so there is
+  nothing here to escalate from.
+- The **only** channel for human confirmation is the Slack `ask` route (the bot
+  DM), which a worker drives asynchronously and closes with `await`. Approval
+  happens later in Slack, out of band — it never blocks this session.
+- If a worker couldn't get its `ask` through and closed the row, that's the end
+  of it for this run; the human will see it in Slack. Do not surface it here as a
+  question. Just keep draining.
+
 ### Subagent prompt
 
 The handler instructions live in **`references/worker.md`** next to this file.
