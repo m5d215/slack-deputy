@@ -18,7 +18,9 @@ What you get:
 - **Reaction-as-command** — a reaction you place becomes a trigger; you map
   reactions to actions yourself (`reactions.tsv`).
 - **Human-in-the-loop** — before anything risky the agent asks you in a bot DM:
-  approve / reject, pick an option, or reply with a free-text edit.
+  post the draft, ignore, pick an option, or reply with a free-text edit. An
+  executable answer (post / ignore) the daemon carries out at the edge; only a
+  free-text edit is routed back to the agent.
 
 The daemon is dumb plumbing — it owns Slack I/O and a SQLite queue and makes no
 decisions. All judgment lives in the consumer.
@@ -54,9 +56,13 @@ flowchart LR
   (it only claims PKs, never reads message bodies — untrusted Slack text stays out
   of its context) and hands each event to a background *subagent* that reads the
   body, decides, and acts through the CLI.
-- **confirmation** — when a subagent needs a human it `ask`s in a bot DM. Your
-  click or thread reply returns as another queue event, so Slack itself holds the
-  pending state and the server stays stateless.
+- **confirmation** — when a subagent needs a human it `ask`s in a bot DM. You
+  answer by clicking a button or replying in the ask thread. Every answer is
+  recorded as one queue row; a single `status` flag decides what happens next. An
+  executable answer (post the draft, ignore) the daemon carries out at the edge and
+  marks `done` — no second consumer hop. Only an answer that needs judgment (a
+  free-text edit) is left `pending` for a subagent. Slack holds the pending state,
+  so the server stays stateless.
 
 One binary is both the daemon (run with no subcommand) and the CLI the consumer
 drives (`next` / `body` / `post` / `react` / `ask` / …). Every verb goes through
@@ -92,28 +98,37 @@ sequenceDiagram
     D->>SL: under your name
     A->>DB: done(pk)
   else needs human confirmation
-    A->>D: ask (preview + buttons)
+    A->>D: ask (preview + buttons: post / ignore / …)
     D->>SL: bot DM
     A->>DB: await(pk)
     H->>SL: click a button, or reply in the ask thread
     SL-->>D: interaction / reply
-    D->>DB: INSERT confirmation {decision, action, ask_ts}
-    D->>SL: resolve the ask DM
-    Note over L,A: a later tick pulls the confirmation
-    L->>DB: next (claim the confirmation pk)
-    L-)A: spawn (pk only)
-    A->>DB: body(pk)
-    A->>D: dm --thread ask_ts (read back draft + reply)
-    A->>D: carry out the decision (post …)
-    D->>SL: under your name
-    A->>DB: done(pk)
+    alt executable answer (post the draft / ignore)
+      D->>DB: INSERT confirmation done {decision, action}
+      D->>SL: carry it out under your name + resolve the ask DM
+    else needs judgment (free-text edit)
+      D->>DB: INSERT confirmation pending {decision, action, ask_ts}
+      D->>SL: resolve the ask DM
+      Note over L,A: a later tick pulls the confirmation
+      L->>DB: next (claim the confirmation pk)
+      L-)A: spawn (pk only)
+      A->>DB: body(pk)
+      A->>D: dm --thread ask_ts (read back draft + reply)
+      A->>D: carry out the decision (post …)
+      D->>SL: under your name
+      A->>DB: done(pk)
+    end
   end
 ```
 
-The confirmation answer is one path whether you click or reply: both land as a
-single `confirmation` event. The row carries only the decision, the opaque action,
-and a pointer to the ask — the handler reads the content (draft, your reply) back
-from the ask thread, so the server keeps no per-confirmation state.
+Every answer — click or reply — is recorded as a single `confirmation` row; one
+`status` flag decides what happens next. An executable answer (post the draft,
+ignore) the daemon carries out at the edge and marks `done`, so it never reaches
+the consumer — the approval gate stays, but the second LLM hop is gone. An answer
+that needs judgment (a free-text edit) is left `pending`, and a subagent picks it
+up: the row carries only the decision, the opaque action, and a pointer to the ask,
+so the handler reads the content (draft, your reply) back from the ask thread and
+the server keeps no per-confirmation state.
 
 ## Install
 

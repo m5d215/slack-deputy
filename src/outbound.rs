@@ -114,25 +114,42 @@ struct PostReq {
     text: String,
 }
 
-async fn post_handler(Json(req): Json<PostReq>) -> ApiResult {
+/// Post a message under the user token and return its ts. Shared by the `/post`
+/// verb and the terminal `投稿` confirmation button (`confirm::handle_interaction`),
+/// so both learn the response bot_id for echo suppression the same way.
+pub async fn post_message(
+    channel: String,
+    thread_ts: Option<String>,
+    text: String,
+) -> Result<String, String> {
     let shared = Shared::get();
     let token = user_session();
     let session = shared.slack.open_session(&token);
     let mut api = SlackApiChatPostMessageRequest::new(
-        SlackChannelId::from(req.channel.clone()),
-        SlackMessageContent::new().with_text(req.text),
+        SlackChannelId::from(channel.clone()),
+        SlackMessageContent::new().with_text(text),
     );
-    if let Some(t) = req.thread_ts {
+    if let Some(t) = thread_ts {
         api = api.with_thread_ts(SlackTs::from(t));
     }
-    let resp = session.chat_post_message(&api).await.map_err(fail)?;
+    let resp = session
+        .chat_post_message(&api)
+        .await
+        .map_err(|e| format!("{e:?}"))?;
 
     // Learn the bot_id Slack stamps on our user-token posts → echo suppression.
     if let Some(bot_id) = resp.message.sender.bot_id.as_ref() {
         shared.learn_self_bot(bot_id.as_ref());
     }
-    info!(kind = "outbound.posted", channel = %req.channel, ts = %resp.ts, "posted as user");
-    Ok(Json(json!({ "ok": true, "ts": resp.ts.to_string() })))
+    info!(kind = "outbound.posted", channel = %channel, ts = %resp.ts, "posted as user");
+    Ok(resp.ts.to_string())
+}
+
+async fn post_handler(Json(req): Json<PostReq>) -> ApiResult {
+    let ts = post_message(req.channel, req.thread_ts, req.text)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(json!({ "ok": true, "ts": ts })))
 }
 
 #[derive(Deserialize)]
@@ -218,7 +235,14 @@ async fn thread_handler(Json(req): Json<ThreadReq>) -> ApiResult {
 #[derive(Deserialize)]
 struct AskReq {
     text: String,
-    action: Value,
+    /// Routed action JSON (for `--choose` or a non-post approval). A subagent runs
+    /// it on a later tick. `null` when the ask is a terminal post.
+    #[serde(default)]
+    action: Option<Value>,
+    /// Terminal post routing `{type:"post", channel, thread}`. When set, the
+    /// approve button is `投稿` and the daemon posts the draft on click.
+    #[serde(default)]
+    post: Option<Value>,
     #[serde(default)]
     choices: Vec<String>,
     #[serde(default)]
@@ -229,10 +253,16 @@ struct AskReq {
 
 /// Post a confirmation DM with buttons (control channel).
 async fn ask_handler(Json(req): Json<AskReq>) -> ApiResult {
-    let (channel, ts) =
-        crate::confirm::ask(req.text, req.action, req.choices, req.danger, req.context)
-            .await
-            .map_err(fail)?;
+    let (channel, ts) = crate::confirm::ask(
+        req.text,
+        req.action,
+        req.post,
+        req.choices,
+        req.danger,
+        req.context,
+    )
+    .await
+    .map_err(fail)?;
     Ok(Json(json!({ "ok": true, "channel": channel, "ts": ts })))
 }
 

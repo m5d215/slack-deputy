@@ -1,10 +1,16 @@
 //! Human confirmation IF (control channel = bot DM).
 //!
-//! `ask` posts a bot DM with buttons (approve/reject, or one per `--choose`
-//! option, optionally `--danger`); the opaque action rides in each button's value.
-//! An answer — a button click or a free-text reply in the ask thread — comes back
-//! over the same socket and is normalized into a content-free `confirmation` row
-//! (`{decision, action, ask_ts}`); the ask DM is edited to show the outcome. The
+//! `ask` posts a bot DM with buttons. A button is one of two kinds, told apart by
+//! the key its routing rides under in the button value:
+//! - **terminal** (`exec`): the daemon runs it the moment the human clicks — `投稿`
+//!   posts the ask's draft under the user token, `無視` (always present) just closes
+//!   the ask. No consumer hop. The click is still recorded, as a `done` row.
+//! - **routed** (`action`): a `--choose` option (or a non-post approval). The click
+//!   becomes a `pending` confirmation row a subagent handles on a later tick.
+//!
+//! So one `status` flag decides whether an answer reaches the consumer at all.
+//! A free-text reply in the ask thread is always routed (it needs judgment).
+//! `confirmation` rows are content-free (`{decision, action|exec, ask_ts}`); the
 //! consumer reads the ask thread back (`dm_history`) for the draft / reply.
 
 use crate::state::Shared;
@@ -42,26 +48,35 @@ fn section_text(content: &SlackMessageContent) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("\n\n"))
 }
 
-/// The opaque action embedded in an ask's buttons (each value = {decision, action}).
-/// None if the message isn't one of our asks.
-fn action_from_blocks(content: &SlackMessageContent) -> Option<Value> {
+/// The routing embedded in an ask's buttons. A button value carries it under
+/// `exec` (terminal) or `action` (routed) — same shape, the key just says who
+/// executes. Returns the first non-`ignore` routing, so a free-text reply to a
+/// terminal post ask recovers the post target rather than the `無視` no-op. None
+/// if the message isn't one of our asks.
+fn routing_from_blocks(content: &SlackMessageContent) -> Option<Value> {
+    let mut ignore_fallback = None;
     for b in content.blocks.as_ref()? {
         let SlackBlock::Actions(a) = b else { continue };
         for el in &a.elements {
             let SlackActionBlockElement::Button(btn) = el else {
                 continue;
             };
-            if let Some(action) = btn
+            let Some(routing) = btn
                 .value
                 .as_ref()
                 .and_then(|v| serde_json::from_str::<Value>(v).ok())
-                .and_then(|p| p.get("action").cloned())
-            {
-                return Some(action);
+                .and_then(|p| p.get("exec").or_else(|| p.get("action")).cloned())
+            else {
+                continue;
+            };
+            if routing.get("type").and_then(|t| t.as_str()) == Some("ignore") {
+                ignore_fallback.get_or_insert(routing);
+            } else {
+                return Some(routing);
             }
         }
     }
-    None
+    ignore_fallback
 }
 
 /// Rebuild a confirmation message with the buttons (the Actions block) replaced by
@@ -116,17 +131,43 @@ fn decision_button(decision: &str, label: &str, action: &Value) -> SlackBlockBut
     .with_value(value)
 }
 
+/// A terminal button: its routing rides under `exec`, so `handle_interaction`
+/// runs it at the edge (the daemon posts / no-ops) instead of queuing it for a
+/// subagent. `投稿` and the always-present `無視` are built this way.
+fn exec_button(decision: &str, label: &str, exec: &Value) -> SlackBlockButtonElement {
+    let value = json!({ "decision": decision, "exec": exec }).to_string();
+    SlackBlockButtonElement::new(
+        SlackActionId::from(decision),
+        SlackBlockPlainTextOnly::from(label),
+    )
+    .with_value(value)
+}
+
+/// The confirm dialog for `--danger` (a second click before an irreversible op).
+fn confirm_dialog() -> SlackBlockConfirmItem {
+    SlackBlockConfirmItem::new(
+        SlackBlockPlainTextOnly::from("実行の確認"),
+        SlackBlockMarkDownText::new("この操作を実行します。よろしいですか？".into()).into(),
+        SlackBlockPlainTextOnly::from("実行する"),
+        SlackBlockPlainTextOnly::from("やめる"),
+    )
+}
+
 /// Post a confirmation DM and return the DM (channel, ts). The interaction shape
 /// is declared by the caller; the daemon owns the Block Kit so the consumer never
-/// builds blocks:
-/// - default: 承認 / 却下 buttons (decision = "approve" / "reject").
-/// - `choices`: one button per choice (decision = the chosen string) + 却下.
-/// - `danger`: 承認 gets danger styling + a confirm dialog.
+/// builds blocks. Exactly one positive button is built, then `無視` is appended:
+/// - `post`: terminal `投稿` — the daemon posts the ask's draft on click.
+/// - `choices`: routed — one button per choice (decision = the chosen string).
+/// - `action` (neither of the above): routed `承認` escape hatch for a non-post op.
+/// - `danger`: the positive button gets danger styling + a confirm dialog.
+/// - `無視`: always present, terminal no-op (just closes the ask).
 ///
-/// `action` is opaque to us; it rides in each button's value and comes back on click.
+/// `action` rides under `action` (routed, opaque to us); `post` under `exec`
+/// (terminal, we read its `channel`/`thread` to post). Both come back on click.
 pub async fn ask(
     text: String,
-    action: Value,
+    action: Option<Value>,
+    post: Option<Value>,
     choices: Vec<String>,
     danger: bool,
     context: Option<String>,
@@ -136,26 +177,33 @@ pub async fn ask(
     let token = bot_token();
     let session = shared.slack.open_session(&token);
 
+    let style = if danger { "danger" } else { "primary" }.to_string();
     let mut buttons: Vec<SlackActionBlockElement> = Vec::new();
-    if choices.is_empty() {
-        let mut approve = decision_button("approve", "承認", &action)
-            .with_style(if danger { "danger" } else { "primary" }.to_string());
+    if let Some(post) = &post {
+        // Terminal: the daemon posts the draft on click, no consumer hop.
+        let mut btn = exec_button("post", "投稿", post).with_style(style);
         if danger {
-            approve = approve.with_confirm(SlackBlockConfirmItem::new(
-                SlackBlockPlainTextOnly::from("実行の確認"),
-                SlackBlockMarkDownText::new("この操作を実行します。よろしいですか？".into()).into(),
-                SlackBlockPlainTextOnly::from("実行する"),
-                SlackBlockPlainTextOnly::from("やめる"),
-            ));
+            btn = btn.with_confirm(confirm_dialog());
         }
-        buttons.push(approve.into());
-    } else {
+        buttons.push(btn.into());
+    } else if !choices.is_empty() {
+        let action = action.clone().unwrap_or(Value::Null);
         for choice in &choices {
             buttons.push(decision_button(choice, choice, &action).into());
         }
+    } else if let Some(action) = &action {
+        // Routed escape hatch: a non-post approval a subagent executes.
+        let mut approve = decision_button("approve", "承認", action).with_style(style);
+        if danger {
+            approve = approve.with_confirm(confirm_dialog());
+        }
+        buttons.push(approve.into());
+    } else {
+        return Err("ask needs one of: post, choices, action".to_string());
     }
+    // 無視: always present, terminal no-op (the daemon just closes the ask).
     buttons.push(
-        decision_button("reject", "却下", &action)
+        exec_button("ignore", "無視", &json!({ "type": "ignore" }))
             .with_style("danger".to_string())
             .into(),
     );
@@ -287,7 +335,7 @@ pub async fn try_free_text_answer(shared: &Shared, m: &SlackMessageEvent) -> boo
         }
     };
     let Some(root) = root else { return false };
-    let Some(action) = action_from_blocks(&root.content) else {
+    let Some(action) = routing_from_blocks(&root.content) else {
         return false; // not an ask
     };
 
@@ -334,41 +382,59 @@ pub async fn handle_interaction(
     let clicked = ev.actions.as_ref().and_then(|a| a.first());
     let value = clicked.and_then(|a| a.value.clone()).unwrap_or_default();
 
-    // The button value carries {decision, action}. Fall back to action_id for the
-    // decision and the raw value as the action if it isn't the expected shape.
+    // The button value carries {decision, exec|action}. Fall back to action_id for
+    // the decision if it isn't the expected shape.
     let parsed: Value = serde_json::from_str(&value).unwrap_or(Value::Null);
     let decision = parsed
         .get("decision")
         .and_then(|d| d.as_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| clicked.map(|a| a.action_id.to_string()).unwrap_or_default());
-    let action_json: Value = parsed
-        .get("action")
-        .cloned()
-        .unwrap_or_else(|| Value::String(value.clone()));
 
-    // The container tells us which DM message to edit.
+    // The container tells us which DM message to edit (and is the ask pointer).
     let (channel, msg_ts) = match &ev.container {
         SlackInteractionActionContainer::Message(m) => {
             (m.channel_id.clone(), Some(m.message_ts.clone()))
         }
         _ => (None, None),
     };
-
-    // Record the decision as a confirmation row. We store only the decision, the
-    // opaque action (relayed — the buttons that hold it are about to be edited
-    // away), and a pointer to the ask. The handler reads the ask thread back for
-    // any content (draft, free-text reply) — the daemon doesn't extract content.
     let ask_ts = msg_ts.as_ref().map(|t| t.to_string());
-    let body = json!({ "decision": decision, "action": action_json, "ask_ts": ask_ts }).to_string();
-    let ts = msg_ts.as_ref().map(|t| t.to_string()).unwrap_or_else(now);
     let chan_str = channel.as_ref().map(|c| c.to_string());
-    if let Err(e) = shared.db.insert(
+
+    // Terminal (`exec`) vs routed (`action`). A terminal button the daemon runs
+    // now and records as `done` (the consumer never sees it); a routed one becomes
+    // a `pending` row a subagent handles on a later tick.
+    let (status, label, body) = if let Some(exec) = parsed.get("exec") {
+        let draft = ev.message.as_ref().and_then(|m| section_text(&m.content));
+        let (label, result) = run_terminal(exec, draft).await;
+        let body =
+            json!({ "decision": decision, "exec": exec, "ask_ts": ask_ts, "result": result })
+                .to_string();
+        ("done", label, body)
+    } else {
+        // Relay the opaque action (the buttons holding it are about to be edited
+        // away); the subagent reads the ask thread back for content (draft, reply).
+        let action = parsed
+            .get("action")
+            .cloned()
+            .unwrap_or_else(|| Value::String(value.clone()));
+        let label = if decision == "approve" {
+            "✅ 承認済み".to_string()
+        } else {
+            format!("✅ {decision}") // a chosen option
+        };
+        let body = json!({ "decision": decision, "action": action, "ask_ts": ask_ts }).to_string();
+        ("pending", label, body)
+    };
+
+    let ts = msg_ts.as_ref().map(|t| t.to_string()).unwrap_or_else(now);
+    if let Err(e) = shared.db.insert_with_status(
         "confirmation",
         chan_str.as_deref(),
         None,
         &ts,
         &body,
+        status,
         &now(),
     ) {
         warn!(kind = "confirm.insert_failed", error = %format!("{e:?}"), "confirmation insert failed");
@@ -377,11 +443,6 @@ pub async fn handle_interaction(
     // Edit the DM: drop the buttons, show the outcome (so open/answered is
     // legible from the DM alone, for humans and for handler subagents).
     if let (Some(c), Some(t)) = (channel, msg_ts) {
-        let label = match decision.as_str() {
-            "reject" => "❌ 却下".to_string(),
-            "approve" => "✅ 承認済み".to_string(),
-            other => format!("✅ {other}"), // a chosen option
-        };
         let content = resolved_content(
             ev.message.as_ref().and_then(|m| m.content.blocks.clone()),
             &label,
@@ -393,6 +454,47 @@ pub async fn handle_interaction(
             warn!(kind = "confirm.dm_edit_failed", error = %format!("{e:?}"), "DM edit failed");
         }
     }
-    info!(kind = "confirm.resolved", decision = %decision, "confirmation resolved");
+    info!(kind = "confirm.resolved", decision = %decision, status = %status, "confirmation resolved");
     Ok(())
+}
+
+/// Carry out a terminal button at the edge. Returns (DM outcome label, a JSON
+/// result for the `done` row's audit body). `post` posts the ask's `draft` (its
+/// section text) under the user token; `ignore` (and anything else) is a no-op
+/// close.
+async fn run_terminal(exec: &Value, draft: Option<String>) -> (String, Value) {
+    match exec.get("type").and_then(|t| t.as_str()) {
+        Some("post") => {
+            let channel = exec
+                .get("channel")
+                .and_then(|c| c.as_str())
+                .map(|s| s.to_string());
+            let thread = exec
+                .get("thread")
+                .and_then(|t| t.as_str())
+                .map(|s| s.to_string());
+            match (draft, channel) {
+                (Some(text), Some(channel)) => {
+                    match crate::outbound::post_message(channel, thread, text).await {
+                        Ok(ts) => ("✅ 投稿済み".to_string(), json!({ "posted_ts": ts })),
+                        Err(e) => {
+                            warn!(kind = "confirm.post_failed", error = %e, "terminal post failed");
+                            ("⚠️ 投稿失敗".to_string(), json!({ "error": e }))
+                        }
+                    }
+                }
+                _ => {
+                    warn!(
+                        kind = "confirm.post_invalid",
+                        "terminal post missing draft or channel"
+                    );
+                    (
+                        "⚠️ 投稿失敗".to_string(),
+                        json!({ "error": "missing draft or channel" }),
+                    )
+                }
+            }
+        }
+        _ => ("🚫 無視".to_string(), json!({ "ignored": true })),
+    }
 }
