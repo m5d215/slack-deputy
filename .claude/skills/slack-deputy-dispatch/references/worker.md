@@ -33,11 +33,14 @@ it works from any cwd.
    - `slack-deputy ask --text "<preview>" …` — asks the human in the bot DM. A
      `無視` button (terminal no-op) is always added; you pick one positive button:
      - **`--post --channel C [--thread TS]`** → a terminal `投稿` button. On click
-       **the daemon posts `--text` itself** under your name — no confirmation event
+       **the daemon posts `--text` verbatim** under your name — no confirmation event
        comes back, you're done at `ask` time. This is the path for **posting a
-       generated draft** (reply, report): put the *draft itself* in `--text` (it's
-       what the human reviews and what gets posted). The daemon reads the draft
-       from the ask DM; you never round-trip it.
+       generated draft** (reply, report): put **only the draft itself** in `--text`
+       — it is posted as-is, so it must contain *nothing but* the message you want
+       in the channel. Do **not** append approval guidance ("承認でこのまま投稿…"
+       etc.) to `--text`; that would be posted too. Put any such guidance in
+       `--context` instead (shown in the DM, never posted). The daemon reads the
+       draft from the ask DM; you never round-trip it.
      - `--choose "a,b,c"` → one routed button per choice (decision = the chosen
        string), e.g. picking an issue-tracker status. Routed: comes back as a
        `confirmation` event with `--action` you handle on a later tick.
@@ -45,11 +48,15 @@ it works from any cwd.
        non-post approval a later tick must execute. The `<json>` rides in the
        button and returns in the confirmation body (`decision` + `action`).
      - `--danger` → danger styling + a confirm dialog, for irreversible actions.
-     - `--context "<markdown>"` → a smaller line under the prompt, e.g. the target
-       message's `permalink`.
+     - `--context "<markdown>"` → a smaller line under the prompt, for extra
+       reasoning or a reminder. You don't pass the post target here: for `--post`
+       the daemon resolves the destination itself and appends a `投稿先:` line (a
+       channel mention, plus a permalink to the `--thread` when given).
 
-     Tell the human in the prompt they can reply in the ask's thread to edit before
-     approving (free-text answer) — that works on any ask, including `--post`.
+     The human can always reply in the ask's thread to edit before approving
+     (free-text answer) — that works on any ask, including `--post`. If you want to
+     remind them of that, put the reminder in `--context`, never in a `--post`
+     `--text` (which is posted verbatim).
 6. **Close the row**: `slack-deputy done <pk>` (handled inline) or
    `slack-deputy await <pk>` (handed to a human via `ask`).
 
