@@ -102,6 +102,37 @@ fn resolved_content(blocks: Option<Vec<SlackBlock>>, label: &str) -> SlackMessag
         .with_blocks(kept)
 }
 
+/// The `投稿先:` context line for a post ask: a channel mention, plus a permalink
+/// to the target thread when `--thread` was given. The worker can't resolve
+/// permalinks (it holds no workspace domain), so the daemon does it here from the
+/// post routing. Best effort — a missing channel drops the line, and a
+/// `getPermalink` failure degrades to the bare channel mention rather than
+/// failing the ask.
+async fn post_destination_line(post: &Value) -> Option<String> {
+    let channel = post.get("channel").and_then(|c| c.as_str())?;
+    let mention = format!("<#{channel}>");
+    let Some(thread) = post.get("thread").and_then(|t| t.as_str()) else {
+        return Some(format!("投稿先: {mention}"));
+    };
+    let shared = Shared::get();
+    let token = bot_token();
+    let session = shared.slack.open_session(&token);
+    let req = SlackApiChatGetPermalinkRequest {
+        channel: SlackChannelId::from(channel.to_string()),
+        message_ts: SlackTs::from(thread.to_string()),
+    };
+    match session.chat_get_permalink(&req).await {
+        Ok(resp) => Some(format!(
+            "投稿先: {mention} (<{}|該当スレッド>)",
+            resp.permalink
+        )),
+        Err(e) => {
+            warn!(kind = "confirm.permalink_failed", error = %format!("{e:?}"), "getPermalink failed");
+            Some(format!("投稿先: {mention}"))
+        }
+    }
+}
+
 /// Open (or fetch) the DM channel with the human, using the bot token.
 async fn open_dm() -> Result<SlackChannelId, String> {
     let shared = Shared::get();
@@ -210,10 +241,21 @@ pub async fn ask(
 
     let section = SlackSectionBlock::new().with_text(SlackBlockMarkDownText::new(text).into());
     let mut blocks: Vec<SlackBlock> = vec![section.into()];
+    // Context block: the worker's `--context` and the auto-resolved post target,
+    // newline-joined so both survive when used together.
+    let mut ctx_parts: Vec<String> = Vec::new();
     if let Some(ctx) = context {
+        ctx_parts.push(ctx);
+    }
+    if let Some(post) = &post
+        && let Some(dest) = post_destination_line(post).await
+    {
+        ctx_parts.push(dest);
+    }
+    if !ctx_parts.is_empty() {
         blocks.push(
             SlackContextBlock::new(vec![SlackContextBlockElement::MarkDown(
-                SlackBlockMarkDownText::new(ctx),
+                SlackBlockMarkDownText::new(ctx_parts.join("\n")),
             )])
             .into(),
         );
