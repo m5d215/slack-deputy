@@ -158,6 +158,26 @@ impl Db {
         Ok(row)
     }
 
+    /// True if a row is claimable right now — `claim_next`'s SELECT without the
+    /// claim. `wait` polls this so its `ready` signal never decays into a `next`
+    /// that returns null (same eligibility: pending, no in-flight sibling).
+    pub fn has_claimable(&self) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().expect("db mutex poisoned");
+        let found: Option<i64> = conn
+            .query_row(
+                "SELECT 1 FROM messages
+                 WHERE status = 'pending'
+                   AND (thread_ts IS NULL
+                        OR thread_ts NOT IN (SELECT thread_ts FROM messages
+                                             WHERE status = 'dispatched' AND thread_ts IS NOT NULL))
+                 LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(found.is_some())
+    }
+
     /// Highest pk (0 if empty). For `tail` to start from "now".
     pub fn max_pk(&self) -> rusqlite::Result<i64> {
         let conn = self.conn.lock().expect("db mutex poisoned");
