@@ -1,6 +1,6 @@
 [package]
 name = "slack-deputy"
-version = "0.0.4"
+version = "0.0.5"
 edition = "2024"
 license = "MIT"
 description = "Act as yourself on Slack — a personal Slack agent daemon"
