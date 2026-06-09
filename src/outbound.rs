@@ -37,6 +37,39 @@ async fn next_handler() -> ApiResult {
     }))
 }
 
+/// How often `wait_handler` re-checks the queue while blocking. The queue has no
+/// notify channel, so this is a plain poll; 1s is cheap and bounds the extra
+/// dispatch latency once a claimable row lands.
+const WAIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+#[derive(Deserialize)]
+struct WaitReq {
+    /// Seconds to block before returning `{ready:false}`. 0 = check once.
+    #[serde(default)]
+    timeout_secs: u64,
+}
+
+/// Block until a claimable row exists (`{ready:true}`) or the timeout elapses
+/// (`{ready:false}`). Claims nothing — the consumer parks this (in the background)
+/// between drains so it wakes the instant a message lands instead of paying a cron
+/// tick's latency floor. Claiming stays in `next` alone, so a wakeup lost across a
+/// compaction can never orphan a row: the next drain re-fetches everything pending.
+/// `ready` mirrors `claim_next`'s eligibility (a pending row with no in-flight
+/// sibling), so a true never decays into a `next` that returns null.
+async fn wait_handler(Json(req): Json<WaitReq>) -> ApiResult {
+    let db = &Shared::get().db;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(req.timeout_secs);
+    loop {
+        if db.has_claimable().map_err(fail)? {
+            return Ok(Json(json!({ "ready": true })));
+        }
+        if req.timeout_secs == 0 || tokio::time::Instant::now() >= deadline {
+            return Ok(Json(json!({ "ready": false })));
+        }
+        tokio::time::sleep(WAIT_POLL_INTERVAL).await;
+    }
+}
+
 #[derive(Deserialize)]
 struct PkReq {
     pk: i64,
@@ -285,6 +318,7 @@ pub async fn run_http_server() {
     let app = Router::new()
         // queue verbs (SQLite, daemon-owned)
         .route("/next", post(next_handler))
+        .route("/wait", post(wait_handler))
         .route("/body", post(body_handler))
         .route("/done", post(done_handler))
         .route("/await", post(await_handler))

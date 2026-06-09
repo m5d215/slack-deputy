@@ -6,6 +6,7 @@
 use crate::db::Row;
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
+use std::time::Duration;
 
 #[derive(Parser)]
 #[command(name = "slack-deputy", about = "Act as yourself on Slack")]
@@ -18,6 +19,15 @@ pub struct Cli {
 pub enum Command {
     /// Claim the oldest pending event (prints `{pk, thread_ts}` or `null`, no body). Marks it dispatched.
     Next,
+    /// Block until a claimable event exists (prints `{ready:true}`), or until
+    /// `--timeout` seconds pass with none (`{ready:false}`). Claims nothing — a
+    /// pure wake signal so the consumer can park a background wait between drains.
+    /// The daemon polls the queue while you block.
+    Wait {
+        /// Seconds to block before giving up and printing `{ready:false}` (0 / omitted = check once).
+        #[arg(long)]
+        timeout: Option<u64>,
+    },
     /// Print the event body JSON for a pk (handler subagent only).
     Body { pk: i64 },
     /// Mark a row done (handled inline).
@@ -163,18 +173,23 @@ fn daemon_url(path: &str) -> String {
     format!("{}{}", base.trim_end_matches('/'), path)
 }
 
-/// POST to the daemon and return its response text (error on non-2xx).
-fn request(path: &str, body: Value) -> Result<String, String> {
-    let resp = reqwest::blocking::Client::new()
+/// POST to the daemon and return its response text (error on non-2xx). `timeout`
+/// overrides the request timeout; the reqwest **blocking** client defaults to 30s
+/// (unlike the async client, which has none), which would cut long-poll verbs like
+/// `wait` short — pass a longer one there, `None` keeps the 30s default.
+fn request(path: &str, body: Value, timeout: Option<Duration>) -> Result<String, String> {
+    let mut rb = reqwest::blocking::Client::new()
         .post(daemon_url(path))
-        .json(&body)
-        .send()
-        .map_err(|e| {
-            format!(
-                "request to daemon failed (is it running? SLACK_DEPUTY_URL={}): {e}",
-                daemon_url("")
-            )
-        })?;
+        .json(&body);
+    if let Some(t) = timeout {
+        rb = rb.timeout(t);
+    }
+    let resp = rb.send().map_err(|e| {
+        format!(
+            "request to daemon failed (is it running? SLACK_DEPUTY_URL={}): {e}",
+            daemon_url("")
+        )
+    })?;
     let status = resp.status();
     let text = resp.text().unwrap_or_default();
     if !status.is_success() {
@@ -185,18 +200,36 @@ fn request(path: &str, body: Value) -> Result<String, String> {
 
 /// POST and print the daemon's response verbatim (what most verbs emit).
 fn http_post(path: &str, body: Value) -> Result<(), String> {
-    println!("{}", request(path, body)?);
+    println!("{}", request(path, body, None)?);
+    Ok(())
+}
+
+/// Like `http_post`, but with an explicit client timeout — for long-poll verbs
+/// that block in the daemon longer than the 30s blocking-client default.
+fn http_post_timeout(path: &str, body: Value, timeout: Duration) -> Result<(), String> {
+    println!("{}", request(path, body, Some(timeout))?);
     Ok(())
 }
 
 /// POST and parse the daemon's response as JSON (for `tail`).
 fn http_post_value(path: &str, body: Value) -> Result<Value, String> {
-    serde_json::from_str(&request(path, body)?).map_err(|e| format!("bad daemon response: {e}"))
+    serde_json::from_str(&request(path, body, None)?)
+        .map_err(|e| format!("bad daemon response: {e}"))
 }
 
 pub fn run(cmd: Command) -> Result<(), String> {
     match cmd {
         Command::Next => http_post("/next", json!({}))?,
+        Command::Wait { timeout } => {
+            let secs = timeout.unwrap_or(0);
+            // The daemon blocks up to `secs`; give the client headroom over that so
+            // its own (30s default) timeout doesn't cut the long-poll short.
+            http_post_timeout(
+                "/wait",
+                json!({ "timeout_secs": secs }),
+                Duration::from_secs(secs + 30),
+            )?
+        }
         Command::Body { pk } => http_post("/body", json!({ "pk": pk }))?,
         Command::Done { pk } => http_post("/done", json!({ "pk": pk }))?,
         Command::Await { pk } => http_post("/await", json!({ "pk": pk }))?,

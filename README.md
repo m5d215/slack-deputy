@@ -55,7 +55,9 @@ flowchart LR
 - **consumer** — a Claude Code skill. A long-lived *dispatcher* drains the queue
   (it only claims PKs, never reads message bodies — untrusted Slack text stays out
   of its context) and hands each event to a background *subagent* that reads the
-  body, decides, and acts through the CLI.
+  body, decides, and acts through the CLI. Between drains it parks a background
+  `wait` that blocks in the daemon until the next event is claimable, then
+  re-invokes the dispatcher — so dispatch is event-driven, with no polling latency.
 - **confirmation** — when a subagent needs a human it `ask`s in a bot DM. You
   answer by clicking a button or replying in the ask thread. Every answer is
   recorded as one queue row; a single `status` flag decides what happens next. An
@@ -65,7 +67,7 @@ flowchart LR
   so the server stays stateless.
 
 One binary is both the daemon (run with no subcommand) and the CLI the consumer
-drives (`next` / `body` / `post` / `react` / `ask` / …). Every verb goes through
+drives (`next` / `wait` / `body` / `post` / `react` / `ask` / …). Every verb goes through
 the daemon's HTTP API — the daemon is the sole owner of SQLite and the Slack
 tokens — so the consumer holds no database and no credentials. Point
 `SLACK_DEPUTY_URL` at the daemon to drive it from another host (see
@@ -109,7 +111,7 @@ sequenceDiagram
     else needs judgment (free-text edit)
       D->>DB: INSERT confirmation pending {decision, action, ask_ts}
       D->>SL: resolve the ask DM
-      Note over L,A: a later tick pulls the confirmation
+      Note over L,A: a later drain pulls the confirmation
       L->>DB: next (claim the confirmation pk)
       L-)A: spawn (pk only)
       A->>DB: body(pk)
@@ -175,8 +177,9 @@ Requires [Homebrew] and a Slack workspace where you can install an app.
 5. **Start the consumer** — make the skills under [`.claude/skills`](.claude/skills)
    available to a resident Claude Code session (clone this repo as a working
    directory, or symlink the skills into your skills dir), then invoke the
-   **`slack-deputy`** skill. It schedules itself to drain the queue on a timer and
-   handle your events. Map reactions to actions in `reactions.tsv` (copy
+   **`slack-deputy`** skill. It drains the queue and parks a background `wait` that
+   wakes it the instant the next event lands, re-arming after each — so it handles
+   your events as they come. Map reactions to actions in `reactions.tsv` (copy
    `reactions.tsv.example`).
 
 ## Running across hosts

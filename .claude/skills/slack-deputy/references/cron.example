@@ -1,8 +1,0 @@
-# Tick schedule(s) for the slack-deputy dispatcher (cron expressions).
-# Copy this file to references/cron and edit it (cron is gitignored).
-# Lines starting with # are comments. Each non-comment, non-blank line creates
-# one dispatcher cron job.
-# Use multiple lines to vary the interval by time of day (e.g. */3 inside a
-# window, */20 outside it). Note that overlapping lines can fire on the same
-# tick and double-dispatch.
-*/3 * * * *
