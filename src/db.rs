@@ -128,23 +128,6 @@ impl Db {
         Ok(found.is_some())
     }
 
-    /// True if this thread already holds a *directed* (non-`ambient`) row. Capture
-    /// scope uses this so a reply becomes dispatchable only when a directed event
-    /// put the thread on our radar — watching a channel (ambient) must not
-    /// transitively dispatch every reply in its threads.
-    pub fn thread_has_directed(&self, thread_ts: &str) -> rusqlite::Result<bool> {
-        let conn = self.conn.lock().expect("db mutex poisoned");
-        let found: Option<i64> = conn
-            .query_row(
-                "SELECT 1 FROM messages
-                 WHERE (ts = ?1 OR thread_ts = ?1) AND status != 'ambient' LIMIT 1",
-                params![thread_ts],
-                |r| r.get(0),
-            )
-            .optional()?;
-        Ok(found.is_some())
-    }
-
     // --- queue verbs (CLI, SQLite-direct) ---
 
     /// Atomically claim the oldest pending row whose partition has no in-flight
