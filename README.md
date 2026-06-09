@@ -159,7 +159,9 @@ Requires [Homebrew] and a Slack workspace where you can install an app.
    ```
 
    Optional: `SLACK_DEPUTY_WATCH_CHANNELS` — comma-separated channel IDs to capture
-   even without a mention.
+   even without a mention. `SLACK_DEPUTY_DM_MENTION_ONLY` — comma-separated DM
+   channel IDs that dispatch only when they mention you (a blacklist for noisy
+   DMs; DMs are otherwise directed by default).
 
 4. **Run the daemon**
 

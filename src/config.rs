@@ -14,6 +14,10 @@ pub struct Config {
     pub listen: String,
     /// Channel IDs to capture even without a mention (capture scope, config-driven).
     pub watch_channels: HashSet<String>,
+    /// DM/group-DM channel IDs that should dispatch *only* when they mention me.
+    /// DMs are directed by default; listing one here drops its un-mentioned
+    /// messages (a blacklist for noisy DMs).
+    pub dm_mention_only: HashSet<String>,
 }
 
 /// Load `KEY=VALUE` lines from the config env file (`$SLACK_DEPUTY_CONFIG`, else
@@ -53,11 +57,15 @@ impl Config {
         let req = |k: &str| std::env::var(k).map_err(|_| format!("{k}: not set"));
         let opt = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_string());
 
-        let watch_channels = opt("SLACK_DEPUTY_WATCH_CHANNELS", "")
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
+        let csv_set = |k: &str| {
+            opt(k, "")
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        };
+        let watch_channels = csv_set("SLACK_DEPUTY_WATCH_CHANNELS");
+        let dm_mention_only = csv_set("SLACK_DEPUTY_DM_MENTION_ONLY");
 
         Ok(Self {
             app_token: req("SLACK_APP_TOKEN")?,
@@ -66,6 +74,7 @@ impl Config {
             db_path: crate::db::resolve_path(),
             listen: opt("SLACK_DEPUTY_LISTEN", "127.0.0.1:8799"),
             watch_channels,
+            dm_mention_only,
         })
     }
 }

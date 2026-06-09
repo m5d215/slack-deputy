@@ -152,15 +152,13 @@ enum Capture {
     Ambient,
 }
 
-/// Classify a message for the queue. Directed signals win over ambient ones, so
-/// a mention inside a watched channel (or a reply in a thread a directed event
-/// already touched) is dispatched, not merely observed.
+/// Classify a message for the queue. Only an explicit signal aimed at me is
+/// dispatched; everything else is observed (ambient) or dropped.
 ///
-/// - `Directed`: DM/group-DM, a mention of me, or a reply in a thread that
-///   already holds a directed row.
+/// - `Directed`: a DM/group-DM (unless blacklisted), or a mention of me.
 /// - `Ambient`: a watched channel, my own manual post (participation + thread
-///   seed), or a reply that only continues an ambient thread.
-/// - `Drop`: everything else.
+///   seed), or a reply that only continues a tracked thread.
+/// - `Drop`: everything else — including un-mentioned messages in a `dm_mention_only` DM.
 fn classify_message(
     shared: &Shared,
     channel_type: Option<&str>,
@@ -169,17 +167,21 @@ fn classify_message(
     user: Option<&str>,
     thread_ts: Option<&str>,
 ) -> Capture {
+    let mentions_me =
+        || matches!(&shared.my_user_id, Some(me) if text.contains(&format!("<@{me}>")));
+
     if matches!(channel_type, Some("im") | Some("mpim")) {
+        // DMs are directed by default; a blacklisted DM dispatches only on mention.
+        if shared.config.dm_mention_only.contains(channel) {
+            return if mentions_me() {
+                Capture::Directed
+            } else {
+                Capture::Drop
+            };
+        }
         return Capture::Directed;
     }
-    if let Some(me) = &shared.my_user_id
-        && text.contains(&format!("<@{me}>"))
-    {
-        return Capture::Directed;
-    }
-    if let Some(t) = thread_ts
-        && shared.db.thread_has_directed(t).unwrap_or(false)
-    {
+    if mentions_me() {
         return Capture::Directed;
     }
     if shared.config.watch_channels.contains(channel) {
@@ -236,23 +238,14 @@ fn handle_reaction(
         }
     }
 
-    // Capture scope for reactions:
-    //  - by me (reaction-as-command: 👀 = look at this, 🎫 = file a ticket, …;
-    //    the reaction→action mapping lives consumer-side). My own *programmatic*
-    //    reactions were already dropped above by the echo ledger, so a `by_me`
-    //    reaction reaching here is a manual one.
-    //  - on my own message, or in a tracked thread.
+    // Capture scope for reactions: only my own (reaction-as-command: 👀 = look
+    // at this, 🎫 = file a ticket, …; the reaction→action mapping lives
+    // consumer-side). My own *programmatic* reactions were already dropped above
+    // by the echo ledger, so a reaction reaching here is a manual one. Everyone
+    // else's reactions are dropped — they are notification-tier, not a command.
     let by_me = matches!(&shared.my_user_id, Some(me) if user.to_string() == *me);
-    let on_my_message = match (&shared.my_user_id, item_user) {
-        (Some(me), Some(iu)) => iu.to_string() == *me,
-        _ => false,
-    };
-    let in_tracked = item_ts
-        .as_deref()
-        .map(|t| shared.db.thread_tracked(t).unwrap_or(false))
-        .unwrap_or(false);
-    if !(by_me || on_my_message || in_tracked) {
-        info!(kind = "scope.drop", row = "reaction", reaction = %reaction.to_string(), "outside capture scope");
+    if !by_me {
+        info!(kind = "scope.drop", row = "reaction", reaction = %reaction.to_string(), "not my reaction");
         return;
     }
 
