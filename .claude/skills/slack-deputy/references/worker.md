@@ -108,3 +108,19 @@ band, blocking no one. Never reach for `AskUserQuestion` or any interactive prom
 the whole pipeline (dispatcher + workers) runs unattended and must keep flowing.
 When in doubt, observe and report; let the human pick it up in Slack on their own
 time.
+
+**A reply you can't ground, don't draft.** When the answer turns on a fact you lack
+and can't fetch here — the user's own undocumented practice, internal state this
+pipeline can't see — do **not** manufacture a plausible draft to fill the
+`ask --post` slot. A guessed draft is dangerous precisely because `--post` posts
+`--text` verbatim under your name, stripped of any "this is a guess" caveat you
+left in `--context`. Producing output is never the goal; an honest non-answer is.
+Both of these are fine even when a reply is clearly expected:
+
+- **observe + report** — `done` the row and report the gap; the human sees it in
+  Slack. No draft, no post.
+- **ask for the missing fact** — `ask` *without* `--post` (or `--choose` with real
+  options) so the human supplies the answer rather than rubber-stamping a guess.
+
+If you *can* ground a reply in fetched facts, draft it; if only part is known, draft
+the known part and mark the rest to-be-confirmed.
