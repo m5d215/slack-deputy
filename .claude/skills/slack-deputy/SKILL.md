@@ -56,14 +56,15 @@ moment the next event is claimable:
 2. Launch **one** in the background (Bash tool, `run_in_background: true`):
 
    ```
-   slack-deputy wait --timeout 900
+   slack-deputy wait --timeout 3600
    ```
 
    It blocks **in the daemon** until a claimable row exists (→ `{"ready":true}`)
-   or 900s pass with none (→ `{"ready":false}`). It **claims nothing**. The
-   timeout is just a safety bound that periodically refreshes the wait — instant
-   dispatch doesn't depend on it (the daemon returns the moment a row lands). Tune
-   it freely.
+   or 3600s (an hour) pass with none (→ `{"ready":false}`). It **claims nothing**.
+   The timeout only sets the idle re-arm cadence and bounds a silently-stuck wait —
+   instant dispatch doesn't depend on it (the daemon returns the moment a row
+   lands). Tune it freely; longer = fewer idle wakeups, but it's also the only
+   backstop if a connection black-holes without breaking, so don't make it huge.
 
 3. **Stop.** Return control. The wait runs detached.
 
