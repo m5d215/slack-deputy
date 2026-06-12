@@ -179,6 +179,10 @@ fn classify_message(
                 Capture::Drop
             };
         }
+        // My own manual post in a DM, with no self-mention: ambient context, not dispatched.
+        if !mentions_me() && matches!(&shared.my_user_id, Some(me) if user == Some(me.as_str())) {
+            return Capture::Ambient;
+        }
         return Capture::Directed;
     }
     if mentions_me() {
